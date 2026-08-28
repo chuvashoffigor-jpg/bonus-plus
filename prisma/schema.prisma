@@ -1,0 +1,88 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Sex {
+  MALE
+  FEMALE
+}
+
+enum TxType {
+  EARNING    // начисление за покупку
+  SPENDING   // списание при оплате
+  MANUAL     // ручная корректировка в админке
+  WELCOME    // приветственные баллы за регистрацию
+  REFUND     // разворот операции при возврате товара
+  ADJUSTMENT // прочие корректировки (сгорание баллов и т.п.)
+}
+
+enum TxSource {
+  POS    // касса МойСклад (офлайн-магазин)
+  ONLINE // сайт InSales / онлайн-заказ
+  ADMIN  // ручная операция в вашей админке
+  SYSTEM // автоматика (приветственные баллы, сгорание и т.п.)
+}
+
+// Счёт клиента в программе лояльности.
+// msCounterpartyId — id контрагента в МойСклад (источник правды по самому клиенту).
+// discountCardNumber — уникальный номер, который печатается/показывается как штрихкод.
+model LoyaltyAccount {
+  id                 String   @id @default(uuid())
+  msCounterpartyId   String?  @unique
+  inSalesCustomerId  String?  @unique
+  discountCardNumber String?  @unique
+  name               String?
+  phone              String?
+  email              String?
+  legalFirstName     String?
+  legalMiddleName    String?
+  legalLastName      String?
+  birthDate          DateTime?
+  sex                Sex?
+  balance            Int      @default(0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  transactions PointsTransaction[]
+
+  @@index([phone])
+  @@index([email])
+}
+
+// История всех операций с баллами — используется и для аудита,
+// и для идемпотентности (не применить одну и ту же продажу дважды),
+// и для корректного разворота операций при возврате товара.
+model PointsTransaction {
+  id                    String    @id @default(uuid())
+  accountId             String
+  account               LoyaltyAccount @relation(fields: [accountId], references: [id])
+  type                  TxType
+  amount                Int       // со знаком: положительное — начисление, отрицательное — списание
+  balanceAfter           Int
+  source                TxSource
+  storeId               String?   // id точки продаж в МойСклад (retailStore.meta.id)
+  msDemandId            String?   // id продажи/возврата в МойСклад — для идемпотентности
+  reversesTransactionId String?   // ссылка на исходную транзакцию, которую разворачивает возврат
+  comment               String?
+  createdAt             DateTime  @default(now())
+
+  @@index([accountId])
+  @@index([msDemandId])
+  @@index([reversesTransactionId])
+}
+
+// Единственная строка с настройками правил начисления/списания.
+// Пока редактируется через `npx prisma studio`, позже — из админки.
+model Settings {
+  id                Int    @id @default(1)
+  earnRatePercent   Float  @default(5)   // % от суммы покупки — начисляется баллами
+  redeemRateRub     Float  @default(1)   // 1 балл = сколько рублей при оплате
+  maxPaymentPercent Float  @default(50)  // максимум % от чека, который можно оплатить баллами
+  welcomeBonus      Int    @default(0)   // баллы за регистрацию нового клиента
+  pointsAttributeId String?              // id доп. поля "Баланс баллов" в МойСклад (кэш)
+}
